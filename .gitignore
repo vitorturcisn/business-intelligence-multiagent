@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Segredos
+.env
+.env.*
+!.env.example
+
+# Testes e lint
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs e runtime
+*.log
+*.sqlite-wal
+*.sqlite-shm
+.secrets/
+
+# Backups e versões antigas
+.backups/
+*.bak
+*.bak-*
+
+# Dados e artefatos gerados
+data/indexes/
+data/sample/*.db
+*.sqlite
+*.sqlite3
+*.db
+
+# Outputs de execução
+outputs/
+
+# Arquivos temporários de editores
+*.swp
+*.tmp

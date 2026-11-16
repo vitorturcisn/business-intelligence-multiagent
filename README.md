@@ -1,24 +1,25 @@
 # Business Intelligence Multi-Agent System
 
-Sistema de Business Intelligence desenvolvido em Python, LangChain e LangGraph. O projeto evolui um agente individual para uma arquitetura hierárquica multiagente capaz de consultar dados comerciais sintéticos, recuperar regras de negócio e consultar a série histórica da meta Selic do Banco Central do Brasil.
+Sistema de Business Intelligence desenvolvido em Python, LangChain e LangGraph. A aplicação usa um Supervisor para coordenar agentes especializados em vendas, conhecimento de negócio e indicadores econômicos.
 
-> **Estado do projeto:** este README descreve o código presente no repositório e distingue funcionalidades implementadas de itens ainda em evolução. Não considere deployment gerenciado, Supabase PGVector, consenso ponderado ou auditoria completa de fidelidade às instruções como concluídos nesta versão.
+> **Estado desta versão:** a arquitetura multiagente, AgentTool, Blackboard, consenso ponderado de evidências, auditoria de fidelidade, HITL, persistência PostgreSQL, recuperação Supabase PGVector e avaliação LangSmith estão implementados. A configuração do LangGraph Agent Server está versionada; isso não significa que exista um deployment cloud publicado.
 
-## 1. Domínio e fontes de dados
-
-O sistema atende perguntas de Business Intelligence sobre vendas, indicadores, fórmulas de negócio e meta Selic.
+## 1. Domínio e fontes
 
 | Fonte | Conteúdo | Uso |
 |---|---|---|
-| `data/sample/sales.db` | Banco SQLite sintético, tabela `sales` | Consultas e agregações comerciais somente leitura |
-| `data/knowledge_base/` | Glossário, dicionário de dados, regras e limitações | Recuperação de evidências documentais |
+| SQLite `data/sample/sales.db` | Dados sintéticos da tabela `sales` | Indicadores comerciais, consultas SQL somente leitura e Text-to-Query validado |
+| `data/knowledge_base/` | Glossário, dicionário, regras e limitações | Recuperação de fórmulas e regras de negócio |
 | Banco Central do Brasil — SGS 432 | Série histórica da meta Selic | Consultas econômicas com intervalo explícito |
+| Supabase PostgreSQL + pgvector | Embeddings dos documentos Markdown | Recuperação semântica opcional para o Knowledge Analyst |
 
-Os dados comerciais são sintéticos e são gerados localmente por um seed determinístico. O arquivo `.db` não precisa ser versionado no Git.
+Os dados de vendas são sintéticos e reproduzíveis pelo seed local. Não representam transações de uma empresa real.
 
-### Regra importante sobre descontos
+### Regra de desconto
 
-`discount_pct` é armazenado como fração decimal: `0.10` representa 10% e `0.05` representa 5%. A receita líquida por item é calculada por:
+`discount_pct` é armazenado como fração decimal: `0.10` representa 10% e `0.05` representa 5%.
+
+A receita líquida por item é:
 
 ```text
 quantity * unit_price * (1 - discount_pct)
@@ -28,288 +29,248 @@ Não divida `discount_pct` por 100 novamente.
 
 ## 2. Arquitetura
 
-O pacote principal está em `src/bi_multiagent/` e contém:
+O pacote principal está em `src/bi_multiagent/`.
 
-- **Agente individual:** `StateGraph`, recuperação prévia de contexto, ciclo ReAct com `ToolNode` e `tools_condition`, histórico limitado com `trim_messages` e checkpoint configurável. O padrão local utiliza `InMemorySaver`.
-- **Supervisor:** roteamento estruturado para os especialistas, com política determinística de proteção e fallback por palavras-chave.
-- **Sales Analyst:** subgrafo para métricas comerciais, templates SQL determinísticos e integração com o Text-to-Query validado.
-- **Knowledge Analyst:** subgrafo de recuperação da base documental, combinando o índice FAISS existente com recuperação documental complementar.
-- **Economic Analyst:** subgrafo para consulta à série SGS 432 do Banco Central.
-- **Coordenação:** fan-out paralelo por `Send`, contratos Pydantic `AgentTask`, `AgentResult` e `SupervisorDecision`, e estado compartilhado no padrão Blackboard.
-- **Audit Agent:** verifica presença de evidências e compatibilidade básica das fontes declaradas. Não equivale, ainda, a consenso ponderado nem a uma auditoria semântica completa.
-- **Human-in-the-loop:** `interrupt()` pausa uma solicitação de gravação de relatório; `Command(resume=...)` recebe aprovação/rejeição. O executor só grava o arquivo local após autorização.
-- **Concorrência:** o CLI multiagente utiliza advisory lock PostgreSQL por `thread_id`; uma segunda execução concorrente da mesma thread é rejeitada.
-- **A2A:** servidores especializados publicam Agent Cards e recebem tarefas pelo SDK A2A. Esta integração é separada: o Supervisor principal ainda invoca subgrafos locais diretamente.
-- **Raciocínio alternativo:** `plan_execute_graph.py` implementa Plan-and-Execute para comparação com ReAct.
+- **Supervisor:** recebe a solicitação, produz uma decisão estruturada e seleciona os especialistas necessários. Há uma política determinística de proteção de roteamento e um fallback por palavras-chave.
+- **Sales Analyst:** consulta schema e indicadores comerciais. Usa templates SQL de somente leitura e Text-to-Query com plano validado por catálogo fechado.
+- **Knowledge Analyst:** combina recuperação semântica (FAISS ou Supabase PGVector) com recuperação documental complementar.
+- **Economic Analyst:** consulta a série SGS 432 do Banco Central quando há um período explícito.
+- **AgentTool:** encapsula cada subgrafo especialista como uma ferramenta LangChain estruturada, com contratos `AgentTask` e `AgentResult`.
+- **Blackboard:** compartilha resultados e artefatos da execução entre Supervisor, especialistas, auditoria e síntese.
+- **Consenso ponderado:** calcula suporte de evidências com pesos por domínio, completude, fontes e alertas. É uma pontuação determinística de suporte, não probabilidade calibrada nem votação semântica de verdade.
+- **Instruction Fidelity Audit:** verifica aderência entre intenção, agentes selecionados, resultados, fontes, síntese e política HITL. É uma auditoria determinística, não uma garantia de factualidade.
+- **Human-in-the-loop:** pedidos explícitos para salvar/exportar relatório pausam com `interrupt()`. A escrita só ocorre após aprovação humana; rejeições não criam arquivo.
+- **Persistência:** o CLI multiagente usa `PostgresSaver` e advisory lock PostgreSQL por `thread_id`.
+- **A2A:** servidores e cliente A2A estão disponíveis para executar especialistas separadamente. A camada A2A é independente: o Supervisor principal ainda delega aos subgrafos locais.
+- **Raciocínio alternativo:** `plan_execute_graph.py` mantém a arquitetura Plan-and-Execute para comparação com ReAct.
 
-A documentação complementar está em `docs/`, incluindo decisões arquiteturais, protocolo A2A, governança humana e comparação de arquiteturas de raciocínio.
+## 3. Requisitos e instalação
 
-## 3. Requisitos
-
-- Python **3.12** (o `pyproject.toml` restringe a versão a `>=3.12,<3.13`).
+- Python `>=3.12,<3.13`.
 - Git.
-- Ollama instalado e em execução para os fluxos que utilizam o modelo local.
-- PostgreSQL acessível para o CLI multiagente, persistência e lock por thread.
-- Chave LangSmith para publicar datasets/experimentos e habilitar tracing remoto.
-- Acesso à internet para instalar dependências e consultar a API pública do Banco Central.
+- Ollama em execução para fluxos com modelo local.
+- PostgreSQL para persistência do CLI multiagente.
+- Chave LangSmith para tracing e avaliações remotas.
+- URI de banco Supabase para ativar PGVector.
 
-Modelo local padrão: `qwen3:1.7b` via Ollama.
-
-## 4. Instalação local — Windows PowerShell
-
-Clone o repositório e entre na pasta:
+No Windows PowerShell:
 
 ```powershell
 git clone https://github.com/vitorturcisn/business-intelligence-multiagent.git
 Set-Location business-intelligence-multiagent
-```
 
-Crie e ative o ambiente virtual:
-
-```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-```
-
-Instale o projeto com os extras de desenvolvimento, recuperação e NLI:
-
-```powershell
-python -m pip install -e ".[dev,retrieval,nli]"
-```
-
-Crie o arquivo local de configuração e edite os valores necessários:
-
-```powershell
+python -m pip install -e ".[dev,retrieval]"
 Copy-Item .env.example .env
 notepad .env
-```
-
-Nunca coloque credenciais reais no `.env.example` nem faça commit do `.env`.
-
-Instale/inicie o modelo local:
-
-```powershell
 ollama pull qwen3:1.7b
 ```
 
-Confirme que o serviço Ollama está disponível em `http://localhost:11434`.
+O extra `nli` é opcional e instala dependências adicionais de Transformers/PyTorch:
 
-## 5. Gerar o banco SQLite sintético
+```powershell
+python -m pip install -e ".[nli]"
+```
 
-O gerador determinístico está em `src/bi_multiagent/data/seed.py`. Ele cria 500 identificadores de pedido e seus itens, com valores e datas reprodutíveis para a mesma seed.
+Nunca versione `.env`, tokens, senhas ou URIs com credenciais.
 
-Em um clone novo, gere o banco com:
+## 4. Configuração
+
+Edite somente o `.env` local.
+
+### Ollama
+
+```dotenv
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen3:1.7b
+```
+
+### LangSmith
+
+```dotenv
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=business-intelligence-supervisor
+LANGSMITH_WORKSPACE_ID=
+```
+
+O workspace ID é opcional, conforme o tipo de chave da organização.
+
+### PostgreSQL do checkpointer
+
+```dotenv
+POSTGRES_CHECKPOINTER_URI=postgresql://USER:PASSWORD@HOST:5432/postgres?sslmode=require
+```
+
+Inicialize as tabelas:
+
+```powershell
+python -m bi_multiagent.persistence.setup
+```
+
+### Supabase PGVector
+
+```dotenv
+SUPABASE_DB_URI=postgresql://USER:PASSWORD@HOST:5432/postgres?sslmode=require
+SUPABASE_SSLMODE=require
+SUPABASE_VECTOR_SCHEMA=public
+SUPABASE_VECTOR_TABLE=business_knowledge_vectors
+SUPABASE_VECTOR_SIZE=384
+KNOWLEDGE_VECTOR_BACKEND=faiss
+```
+
+`SUPABASE_DB_URI` é uma URI PostgreSQL, não a chave REST `SUPABASE_KEY`.
+
+## 5. Banco SQLite sintético
+
+O seed determinístico está em `src/bi_multiagent/data/seed.py`. Em clone novo:
 
 ```powershell
 python -m bi_multiagent.data.seed
 ```
 
-O destino padrão é `data/sample/sales.db`. O gerador **não sobrescreve** um banco existente. Para recriá-lo intencionalmente, faça backup e use:
+O destino padrão é `data/sample/sales.db`. O seed não sobrescreve banco existente. Para recriá-lo deliberadamente, faça backup e execute:
 
 ```powershell
 Copy-Item data/sample/sales.db "$HOME\Downloads\sales-backup.db"
 python -m bi_multiagent.data.seed --force
 ```
 
-A fixture `tests/conftest.py` também cria o banco automaticamente quando ele está ausente durante a execução dos testes. Ela não substitui um arquivo existente com schema válido.
-
-## 6. Configuração PostgreSQL e persistência
-
-O runtime do CLI multiagente utiliza `POSTGRES_CHECKPOINTER_URI` para o `PostgresSaver` e para o advisory lock. Configure essa variável no `.env` com uma URI PostgreSQL válida. Exemplo ilustrativo — substitua host, usuário e senha pelos dados do seu serviço:
-
-```dotenv
-POSTGRES_CHECKPOINTER_URI=postgresql://USER:PASSWORD@HOST:5432/postgres?sslmode=require
-```
-
-Inicialize as tabelas de checkpoint:
+Para usar um banco separado em benchmark:
 
 ```powershell
-python -m bi_multiagent.persistence.setup
+python -m bi_multiagent.data.seed --output .\data\sample\sales_benchmark_v2.db
+$env:BI_MULTIAGENT_DATABASE_PATH = (Resolve-Path .\data\sample\sales_benchmark_v2.db).Path
 ```
 
-O teste `scripts/verify_postgres_persistence.py` verifica a recuperação de uma conversa depois de fechar e reconstruir o pool/conexão. Execute-o somente quando o PostgreSQL estiver configurado e acessível:
+Para voltar ao caminho padrão na sessão atual:
 
 ```powershell
-python scripts/verify_postgres_persistence.py
+Remove-Item Env:BI_MULTIAGENT_DATABASE_PATH -ErrorAction SilentlyContinue
 ```
 
-O agente individual usa `InMemorySaver` por padrão. O CLI multiagente abre o checkpointer PostgreSQL e exige a variável acima.
+## 6. Executar
 
-## 7. Executar o sistema
-
-### Agente individual (ReAct)
+Agente individual (ReAct):
 
 ```powershell
 python -m bi_multiagent.agents.cli --thread-id single-demo
 ```
 
-### Sistema multiagente com Supervisor
-
-Com PostgreSQL configurado e tabelas inicializadas:
+Supervisor multiagente (requer PostgreSQL configurado e tabelas de checkpoint):
 
 ```powershell
 python -m bi_multiagent.agents.multiagent_cli --thread-id multiagent-demo
 ```
 
-Para exercitar o checkpoint humano, faça uma solicitação explícita para salvar o relatório em arquivo. O sistema deve pausar e pedir aprovação ou rejeição antes de gravar em `outputs/approved_reports/`.
+Para testar HITL, peça explicitamente para salvar o relatório em arquivo. O CLI deve pausar, solicitar aprovação/rejeição e só então executar ou rejeitar a gravação.
 
-### Plan-and-Execute
+## 7. Recuperação Supabase PGVector
 
-O grafo alternativo está em `bi_multiagent.agents.plan_execute_graph`. O script `scripts/evaluate_reasoning_architectures.py` compara ReAct e Plan-and-Execute no LangSmith. Consulte a seção de avaliação antes de executá-lo, pois ele publica/usa um dataset remoto e requer credenciais.
-
-## 8. Integração A2A
-
-A integração A2A pode executar cada especialista em um servidor separado. Abra três terminais, com o mesmo ambiente virtual ativo:
-
-```powershell
-python -m bi_multiagent.a2a.server --agent sales
-```
-
-```powershell
-python -m bi_multiagent.a2a.server --agent knowledge
-```
-
-```powershell
-python -m bi_multiagent.a2a.server --agent economic
-```
-
-Em outro terminal, envie uma solicitação para um especialista:
-
-```powershell
-python -m bi_multiagent.a2a.client --agent-url http://127.0.0.1:9101 --question "Calculate total net revenue."
-```
-
-Os Agent Cards são publicados em `/.well-known/agent-card.json`; os endpoints REST ficam sob `/a2a/rest`. O cliente consome eventos de tarefa e artefatos via streaming A2A.
-
-**Limitações atuais do A2A:** o armazenamento de tarefas é em memória; a demonstração local não configura autenticação nem TLS; o Supervisor principal ainda não usa o cliente A2A para delegar; e o streaming comunica eventos de tarefa/artefatos, não tokens do modelo em tempo real.
-
-## 9. LangSmith e avaliação
-
-Configure no `.env`:
+FAISS continua sendo o backend padrão. A recuperação Supabase é ativada somente quando:
 
 ```dotenv
-LANGSMITH_TRACING=true
-LANGSMITH_API_KEY= SUA_CHAVE_LANGSMITH
-LANGSMITH_PROJECT=business-intelligence-multiagent
+KNOWLEDGE_VECTOR_BACKEND=supabase
 ```
 
-O script `scripts/evaluate_reasoning_architectures.py` cria/usa o dataset `bi-multiagent-reasoning-benchmark-v1` e avalia as arquiteturas ReAct e Plan-and-Execute com três dimensões:
+Crie a extensão/tabela/índices no SQL Editor do Supabase usando:
 
-- `response_fidelity`: fidelidade da resposta a termos e valores de referência;
-- `step_execution`: execução das ferramentas/passos e limites de execução;
-- `trajectory_completeness`: completude da trajetória e sequência de nós.
+`supabase/migrations/001_business_knowledge_pgvector.sql`
 
-Execute com:
+Depois execute:
 
 ```powershell
-python scripts/evaluate_reasoning_architectures.py
+python -X utf8 .\scripts\check_supabase_pgvector.py
+python -X utf8 .\scripts\load_supabase_knowledge_base.py
+python -X utf8 .\scripts/check_supabase_pgvector.py
 ```
 
-O dataset atual do script é um benchmark de raciocínio individual. Ele **não substitui** uma avaliação LangSmith específica do Supervisor multiagente. A avaliação dedicada da coordenação, com agentes esperados por cenário, fontes, transições e auditoria, permanece como trabalho a completar.
+O carregador indexa os Markdown de `data/knowledge_base/`. Se a tabela já tiver conteúdo, ele interrompe para evitar duplicação. `--replace` solicita explicitamente a substituição; o script cria uma tabela de backup e tenta restaurar os dados anteriores caso a nova inserção falhe.
 
-As evidências históricas do agente anterior estão preservadas em `docs/baseline_previous_agent/` e `evals/baseline_previous_agent/`. Elas devem ser identificadas como baseline anterior, não como resultados automaticamente reproduzidos pelo sistema multiagente atual.
+Valide a busca:
+
+```powershell
+python -X utf8 -c "from bi_multiagent.retrieval.supabase_pgvector import search_supabase_knowledge_base; print(search_supabase_knowledge_base('Qual é a fórmula da receita líquida?', k=3))"
+```
+
+Para voltar ao FAISS, defina `KNOWLEDGE_VECTOR_BACKEND=faiss`.
+
+## 8. LangGraph Agent Server
+
+O entrypoint `supervisor` está configurado em `langgraph.json` e aponta para `src/bi_multiagent/coordination/deployment.py`.
+
+Para iniciar o servidor local:
+
+```powershell
+python -m pip install "langgraph-cli[inmem]"
+langgraph dev --no-browser
+```
+
+O servidor local normalmente fica em `http://127.0.0.1:2024`. Use o LangGraph Studio para inspecionar o grafo.
+
+A configuração local do Agent Server não é prova de deployment cloud. Para um deployment remoto, revise variáveis/segredos, conectividade com Ollama e PostgreSQL, autenticação e os requisitos da plataforma de destino.
+
+## 9. LangSmith: benchmark e avaliação do Supervisor
+
+Benchmark ReAct vs. Plan-and-Execute:
+
+```powershell
+python -X utf8 .\scripts\evaluate_reasoning_architectures.py --dry-run
+python -X utf8 .\scripts\evaluate_reasoning_architectures.py
+```
+
+A avaliação ponta a ponta do Supervisor usa seis cenários e cinco avaliadores determinísticos:
+
+```powershell
+python -X utf8 .\scripts\evaluate_supervisor_langsmith.py --dry-run
+python -X utf8 .\scripts\evaluate_supervisor_langsmith.py
+```
+
+Casos cobertos: receita líquida total, diferença entre receita bruta/líquida, pergunta combinada de vendas e fórmula, período Selic, regressão de `discount_pct` e exportação com aprovação humana.
+
+Os avaliadores verificam roteamento, política HITL, status da auditoria, consenso e semântica da fração de desconto. Eles medem contratos e controles, não garantem a verdade factual de cada resposta.
+
+Após a execução, para verificar e registrar feedback determinístico em um experimento já existente sem chamar novamente o Ollama:
+
+```powershell
+python -X utf8 .\scripts\register_existing_supervisor_feedback_sync.py --project "NOME_EXATO_DO_EXPERIMENTO"
+```
+
+O script não usa `trace_id` na criação de feedback, evitando submissão batch em background, e ignora feedbacks que já existem.
+
+Para criar um trace novo do cenário corrigido de `discount_pct`:
+
+```powershell
+python -X utf8 .\scripts\trace_discount_pct_incident.py
+```
+
+Esse script registra uma execução corrigida. Ele não recria nem substitui um trace histórico de uma falha anterior.
 
 ## 10. Testes e qualidade
 
-Execute os testes:
-
-```powershell
-python -m pytest -q
-```
-
-Verifique dependências:
+Com o ambiente virtual ativo:
 
 ```powershell
 python -m pip check
-```
-
-Ruff nos arquivos novos do seed/fixture:
-
-```powershell
-python -m ruff check src/bi_multiagent/data/seed.py tests/conftest.py tests/unit/test_seed_sales_db.py
-```
-
-A validação local registrada em 15/11/2026 executou **96 testes aprovados** com o banco SQLite preexistente, incluindo os dois testes novos de seed, com dois avisos de depreciação. Uma validação adicional em clone sem `sales.db` identificou dois testes antigos que comparavam os resultados com totais fixos do banco legado, incompatíveis com o banco sintético gerado pelo seed. Esses testes foram atualizados para calcular a referência diretamente das linhas do banco; a execução limpa precisa ser repetida após a substituição do arquivo. Ruff passou nos três arquivos novos e `pip check` não encontrou requisitos quebrados. Na mesma execução, `ruff check src tests` apontou 72 ocorrências preexistentes em diferentes módulos do projeto legado `business_agent` e outros arquivos; portanto, não se declara lint global limpo nesta versão.
-
-Para conferir o estado completo, execute também:
-
-```powershell
 python -m compileall -q src tests
+python -m pytest -q
 ```
 
-## 11. Estrutura do repositório
+A validação local compartilhada em 16/11/2026, antes desta rodada de revisão, registrou `137 passed`. A suíte precisa ser executada novamente depois de aplicar este patch. O workflow em `.github/workflows/tests.yml` executa instalação, `pip check`, compilação e pytest em pushes e pull requests.
 
-```text
-.
-├── data/
-│   └── knowledge_base/
-├── docs/
-│   ├── a2a_architecture.md
-│   ├── human_in_the_loop.md
-│   ├── langgraph_reasoning_architectures.md
-│   ├── decisions/
-│   └── baseline_previous_agent/
-├── evals/
-│   └── baseline_previous_agent/
-├── scripts/
-├── src/
-│   ├── bi_multiagent/
-│   │   ├── a2a/
-│   │   ├── agents/
-│   │   ├── coordination/
-│   │   ├── persistence/
-│   │   ├── schemas/
-│   │   └── tools/
-│   └── business_agent/
-├── tests/
-│   └── unit/
-├── .env.example
-├── pyproject.toml
-└── requirements.txt
-```
+O lint global do legado não está declarado como limpo; execute Ruff nos módulos específicos que estiverem sendo alterados e trate avisos herdados separadamente.
 
-`business_agent/` preserva componentes do agente anterior que ainda são reutilizados, incluindo ferramentas, memória, recuperação FAISS e verificação. `bi_multiagent/` contém a arquitetura LangGraph individual e multiagente.
+## 11. Limitações conhecidas
 
-## 12. Limitações e próximos passos
+1. **Deployment remoto:** o repositório possui configuração e entrypoint do Agent Server, mas isso não comprova um deployment cloud publicado.
+2. **Ollama remoto:** `http://localhost:11434` é endereço local; um deployment cloud precisa de endpoint de modelo acessível remotamente e protegido.
+3. **Consenso:** o score mede suporte/completude das evidências usando pesos definidos por política; não é consenso semântico entre afirmações nem probabilidade calibrada.
+4. **Instruction Fidelity:** as regras são determinísticas e dependem de padrões/termos conhecidos. Casos ambíguos exigem revisão.
+5. **A2A:** a integração A2A ainda é separada do fluxo principal do Supervisor e precisa de autenticação, TLS e persistência durável para uso de produção.
+6. **Segurança operacional:** o protótipo necessita de controles adicionais de autenticação, autorização, gestão de segredos, monitoramento, limites operacionais e observabilidade antes de uso corporativo.
 
-A versão documentada apresenta as seguintes limitações ou itens em desenvolvimento:
+## 12. Contexto acadêmico
 
-1. **Deployment gerenciado:** ainda não há configuração de LangGraph Platform/Agent Server publicada como deployment reproduzível.
-2. **Supabase PGVector:** a recuperação atual usa FAISS e recuperação documental complementar. A configuração e o vector store Supabase/PGVector de produção ainda precisam ser implementados.
-3. **Consenso ponderado:** o Audit Agent verifica evidências e fontes, mas ainda não implementa consenso ponderado entre agentes.
-4. **Instruction Fidelity Auditing:** a auditoria atual é básica e não avalia integralmente a aderência da resposta às instruções originais. Também não há Watchdog com retry adaptativo implementado.
-5. **AgentTool:** os subgrafos especialistas são chamados diretamente pelo Supervisor; o encapsulamento formal como `AgentTool` ainda precisa ser concluído.
-6. **Avaliação multiagente:** falta dataset e avaliadores LangSmith específicos do Supervisor, incluindo resultados por resposta, passo e trajetória da coordenação.
-7. **Tracing de incidente:** é necessário vincular o diagnóstico histórico do erro de `discount_pct` a um trace verificável da execução que apresentou a falha e à execução corrigida.
-8. **A2A em produção:** falta conectar a camada A2A ao fluxo de delegação do Supervisor e adicionar autenticação, TLS e persistência durável de tarefas.
-
-## 13. Segurança e uso responsável
-
-- Não versionar `.env`, chaves, senhas, bancos locais, índices gerados ou saídas de execução.
-- O SQL comercial deve permanecer somente leitura e limitado às consultas autorizadas pela implementação.
-- As consultas econômicas devem usar a série documentada e informar períodos/fontes.
-- A gravação de relatórios depende de autorização humana explícita.
-- A demonstração é um protótipo acadêmico; não deve ser tratada como um serviço corporativo de produção sem autenticação, autorização, monitoramento, gestão de segredos e controles operacionais adicionais.
-
-## 14. Licença e contexto acadêmico
-
-Projeto desenvolvido para a disciplina **Agentes Cognitivos com LangChain [26E4_2]**. O trabalho utiliza ferramentas de IA como apoio ao desenvolvimento e à documentação; as decisões, validações e evidências apresentadas devem ser verificadas pelo autor.
-
-## Banco SQLite alternativo para benchmark
-
-A variável opcional `BI_MULTIAGENT_DATABASE_PATH` seleciona o arquivo SQLite usado pelos módulos de vendas e pelo benchmark. Quando não está definida ou está vazia, o sistema mantém o caminho padrão `data/sample/sales.db`.
-
-Para validar uma base sintética separada sem substituir o banco local existente:
-
-```powershell
-python -m bi_multiagent.data.seed --output .\data\sample\sales_benchmark_v2.db
-$env:BI_MULTIAGENT_DATABASE_PATH = (Resolve-Path .\data\sample\sales_benchmark_v2.db).Path
-python .\scripts\evaluate_reasoning_architectures.py --dry-run
-```
-
-Para voltar ao banco padrão na sessão atual do PowerShell:
-
-```powershell
-Remove-Item Env:BI_MULTIAGENT_DATABASE_PATH -ErrorAction SilentlyContinue
-```
+Projeto desenvolvido para a disciplina **Agentes Cognitivos com LangChain [26E4_2]**. Ferramentas de IA foram utilizadas como apoio ao desenvolvimento e à documentação; as decisões, validações e evidências devem ser verificadas pelo autor.

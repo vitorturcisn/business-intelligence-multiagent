@@ -47,7 +47,7 @@ def get_sales_schema() -> str:
 
     Identifica tabelas, nomes de colunas, tipos e chaves primárias.
     Consulte esta ferramenta antes de construir SQL.
-    discount_pct ? fra??o decimal: 0.10 representa 10%.
+    discount_pct e fração decimal: 0.10 representa 10%.
     """
     with closing(_open_database()) as connection:
         tables = connection.execute(
@@ -67,7 +67,7 @@ def get_sales_schema() -> str:
             "column_semantics": {
                 "discount_pct": {
                     "storage_format": "decimal_fraction",
-                    "meaning": "Fra??o decimal aplicada ao valor bruto do item.",
+                    "meaning": "Fração decimal aplicada ao valor bruto do item.",
                     "examples": {
                         "0.10": "10%",
                         "0.05": "5%",

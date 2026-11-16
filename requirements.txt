@@ -1,2 +1,2 @@
-# Instala o projeto e suas dependências de desenvolvimento
--e .[dev]
+# Instala o pacote, dependências de desenvolvimento e recuperação vetorial.
+-e .[dev,retrieval]

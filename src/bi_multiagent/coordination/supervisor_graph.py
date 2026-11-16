@@ -127,6 +127,15 @@ def _sales_routing_intent(question: str) -> tuple[bool, bool, bool]:
 
     numeric_terms = (
         "quanto",
+        "qual a receita",
+        "qual e a receita",
+        "qual foi a receita",
+        "qual o faturamento",
+        "qual e o faturamento",
+        "qual foi o faturamento",
+        "receita total",
+        "receita liquida total",
+        "faturamento total",
         "qual foi",
         "valor total",
         " total",
@@ -159,25 +168,62 @@ def enforce_routing_policy(
     question: str,
     proposed_agents: list[str],
 ) -> list[str]:
-    """Impede delegacoes comerciais desnecessarias."""
+    """Apply deterministic routing for clearly classifiable requests.
+
+    The LLM proposes a route, but this guard replaces it for clear sales or
+    Selic intent. Ambiguous/non-domain requests retain the model proposal and
+    remain subject to the Instruction Fidelity Audit.
+    """
+    query = normalize_text(question)
     has_sales, has_conceptual, has_numeric = _sales_routing_intent(question)
+    asks_selic = "selic" in query or "banco central" in query
 
-    selected = set(proposed_agents)
+    required: set[str] | None = None
 
-    if has_sales and has_conceptual:
-        if has_numeric:
-            selected.update({"sales", "knowledge"})
+    if has_sales:
+        if has_conceptual and has_numeric:
+            required = {"sales", "knowledge"}
+        elif has_conceptual or not has_numeric:
+            required = {"knowledge"}
         else:
-            selected.discard("sales")
-            selected.add("knowledge")
+            required = {"sales"}
 
-    elif has_sales and has_numeric:
-        selected.add("sales")
+    if asks_selic:
+        source_terms = (
+            "fonte",
+            "documentado",
+            "documentacao",
+            "origem",
+            "source",
+            "documentation",
+        )
+        asks_source = any(term in query for term in source_terms)
+        has_selic_value_intent = bool(
+            re.search(r"\b\d{2}/\d{2}/\d{4}\b", question)
+            or re.search(r"\b20\d{2}-\d{2}\b", question)
+            or any(
+                term in query
+                for term in (
+                    "qual foi",
+                    "quanto",
+                    "valor",
+                    "taxa",
+                    "percentual",
+                    "porcentagem",
+                    "historica",
+                )
+            )
+        )
+        selic_required = (
+            {"knowledge"}
+            if asks_source and not has_selic_value_intent
+            else {"economic"}
+        )
+        required = (required or set()) | selic_required
 
+    selected = required if required is not None else set(proposed_agents)
     order = ["sales", "knowledge", "economic"]
     return [agent for agent in order if agent in selected]
-
-
 def fallback_route(question: str) -> list[str]:
     """Roteamento deterministico para contingencia do Supervisor."""
     query = normalize_text(question)
@@ -727,7 +773,7 @@ def build_multiagent_graph(
             existing = output_path.read_text(encoding="utf-8")
             if existing != report_content:
                 raise FileExistsError(
-                    "J? existe um relatório diferente para este request_id."
+                    "Já existe um relatório diferente para este request_id."
                 )
         else:
             output_path.write_text(report_content, encoding="utf-8")

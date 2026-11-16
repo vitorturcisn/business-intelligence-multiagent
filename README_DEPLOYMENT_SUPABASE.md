@@ -55,7 +55,7 @@ python -X utf8 .\scripts\load_supabase_knowledge_base.py
 python -X utf8 .\scripts\check_supabase_pgvector.py
 ```
 
-O carregador não apaga registros existentes por padrão. Se a tabela já tiver dados e você realmente desejar reconstruí-la, use `--replace` explicitamente. Esse parâmetro limpa a tabela antes da carga.
+O carregador não apaga registros existentes por padrão. Se a tabela já tiver dados e você realmente desejar reconstruí-la, use `--replace` explicitamente. Antes da substituição, o carregador cria uma tabela de backup; se a inserção falhar, ele tenta restaurar os registros anteriores. Se a restauração automática também falhar, o nome da tabela de backup é exibido para recuperação manual.
 
 ## 5. Ativar Supabase no Knowledge Agent
 

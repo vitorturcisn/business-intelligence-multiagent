@@ -10,13 +10,12 @@ No `.env` local (não versionar a chave):
 
 ```dotenv
 LANGSMITH_TRACING=true
-LANGSMITH_API_KEY=lsv2_...
+LANGSMITH_API_KEY=
 LANGSMITH_PROJECT=business-intelligence-supervisor
-# Opcional, quando sua organização usa API keys scoped a workspace:
 LANGSMITH_WORKSPACE_ID=
 ```
 
-Use a chave LangSmith correta e não compartilhe o valor no terminal ou no chat. Para chaves org-scoped, informe `LANGSMITH_WORKSPACE_ID`; o script passa esse ID explicitamente ao cliente LangSmith.
+Use a chave LangSmith correta. Para chaves scoped a workspace, informe `LANGSMITH_WORKSPACE_ID`.
 
 ## 1. Dry-run
 
@@ -34,38 +33,35 @@ Confirme que Ollama e `qwen3:1.7b` estão ativos:
 ollama list
 ```
 
-Depois rode:
+Execute:
 
 ```powershell
 python -X utf8 .\scripts\evaluate_supervisor_langsmith.py
 ```
 
-O script cria/usa `bi-multiagent-supervisor-evaluation-v1`, executa seis cenários e grava `outputs/evaluation/supervisor_langsmith_manifest.json`. O dataset não é sobrescrito quando já existe: se os exemplos divergirem, crie uma nova versão do nome do dataset.
+O script cria/usa `bi-multiagent-supervisor-evaluation-v1`, executa seis cenários e grava `outputs/evaluation/supervisor_langsmith_manifest.json`. O dataset existente não é sobrescrito quando os exemplos divergem.
 
-## 3. Evidência regressiva do incidente discount_pct
+## 3. Verificar e registrar feedbacks de um experimento existente
 
-O dicionário de dados declara que `discount_pct` é fração decimal (0.10 = 10%) e não deve ser dividido por 100. A fórmula correta da receita líquida é `quantity * unit_price * (1 - discount_pct)`.
+Depois da execução, use o nome exato do experimento exibido no LangSmith:
 
-Execute:
+```powershell
+python -X utf8 .\scripts\register_existing_supervisor_feedback_sync.py --project "supervisor-e2e-AAAA-MM-DD-HHMMSS-XXXXXXXX"
+```
+
+O script recupera as seis execuções existentes, compara os outputs com os exemplos do dataset e registra os feedbacks determinísticos que estiverem faltando. Não chama Ollama nem refaz inferências. A criação não passa `trace_id`, evitando a submissão batch em background. Execuções que já têm feedback são ignoradas.
+
+A expectativa é de quatro avaliadores aplicados aos seis cenários e um avaliador específico aplicado somente ao caso de regressão de desconto: 25 feedbacks no total.
+
+## 4. Trace novo para a regressão `discount_pct`
 
 ```powershell
 python -X utf8 .\scripts\trace_discount_pct_incident.py
 ```
 
-Isso cria um trace novo no projeto `business-intelligence-supervisor`, tagueado como `incident`, `regression` e `discount_pct`, e salva `outputs/evaluation/discount_pct_incident_trace_evidence.json`.
+O script executa um novo cenário corrigido, cria trace no projeto LangSmith e salva `outputs/evaluation/discount_pct_incident_trace_evidence.json`.
 
-Importante: o script registra uma execução regressiva corrigida. Ele não recria o trace histórico original. Se houver um run ID original de antes da correção, anote-o no relatório final como evidência histórica adicional. Se não existir, declare explicitamente essa limitação.
-
-## 4. O que conferir na UI
-
-No projeto `business-intelligence-supervisor`:
-
-- abrir o experimento `supervisor-e2e-*`;
-- verificar que os seis casos foram executados;
-- abrir um caso e confirmar o root trace e seus child runs;
-- inspecionar os nós do Supervisor, Sales/Knowledge/Economic, auditoria, consenso e HITL;
-- confirmar metadados e tags `supervisor`, `multi-agent`, `phase6`;
-- abrir `supervisor-discount-pct-regression` e validar a evidência do SQL correto.
+**Importante:** esse script registra uma execução corrigida. Ele não recria o trace histórico original que apresentou uma falha, nem substitui evidência histórica.
 
 ## Avaliadores
 
@@ -76,3 +72,13 @@ No projeto `business-intelligence-supervisor`:
 - `discount_pct_fraction_semantics`: verifica a fórmula com fração e ausência de divisão por 100 no SQL do agente de vendas.
 
 Esses avaliadores são checagens determinísticas do contrato do sistema; não são garantia de verdade factual.
+
+## O que inspecionar na UI
+
+No projeto `business-intelligence-supervisor`, confira:
+
+- o experimento `supervisor-e2e-*`;
+- os seis casos e seus root/child runs;
+- os nós do Supervisor, especialistas, auditoria, consenso e HITL;
+- tags e metadados `supervisor`, `multi-agent`, `phase6`;
+- o trace corrigido de `discount_pct`.

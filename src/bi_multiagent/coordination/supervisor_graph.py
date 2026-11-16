@@ -14,6 +14,11 @@ from bi_multiagent.agents.specialized_agents import (
     build_knowledge_analyst_graph,
     build_sales_analyst_graph,
 )
+from bi_multiagent.coordination.agent_tools import AgentTool
+from bi_multiagent.coordination.weighted_consensus import (
+    weighted_evidence_consensus,
+)
+from bi_multiagent.coordination.instruction_fidelity import audit_instruction_fidelity
 from bi_multiagent.schemas.contracts import (
     AgentResult,
     AgentTask,
@@ -264,6 +269,8 @@ def _detect_report_export(question: str) -> dict[str, str] | None:
 def build_multiagent_graph(
     router: Any | None = None,
     checkpointer: Any | None = None,
+    *,
+    use_in_memory_saver: bool = True,
 ):
     """Cria o Supervisor hierárquico com especialistas paralelos.
 
@@ -277,6 +284,19 @@ def build_multiagent_graph(
     sales_graph = build_sales_analyst_graph()
     knowledge_graph = build_knowledge_analyst_graph()
     economic_graph = build_economic_analyst_graph()
+
+    # Expose specialist subgraphs as LangChain structured tools.
+    agent_tools = {
+        "sales": AgentTool(
+            "sales", OBJECTIVES["sales"], sales_graph
+        ),
+        "knowledge": AgentTool(
+            "knowledge", OBJECTIVES["knowledge"], knowledge_graph
+        ),
+        "economic": AgentTool(
+            "economic", OBJECTIVES["economic"], economic_graph
+        ),
+    }
 
     # --------------------------------------------------------
     # Preparação da solicitação
@@ -297,6 +317,8 @@ def build_multiagent_graph(
             "route_method": "",
             "route_rationale": "",
             "audit": {},
+            "weighted_consensus": {},
+            "instruction_fidelity": {},
             "approval_required": pending_action is not None,
             "pending_action": pending_action or {},
             "approval": {},
@@ -396,20 +418,9 @@ def build_multiagent_graph(
     # Wrappers dos subgrafos e publicação no Blackboard
     # --------------------------------------------------------
 
-    def execute_worker(
-        graph,
-        agent: str,
-        state: dict,
-    ) -> dict:
-        output = graph.invoke(
-            {
-                "question": state["question"],
-                "request_id": state["request_id"],
-                "task": state["task"],
-            }
-        )
-
-        result = AgentResult.model_validate(output["result"])
+    def execute_worker(agent: str, state: dict) -> dict:
+        agent_tool = agent_tools[agent]
+        result = agent_tool.invoke(state["task"])
         result_data = result.model_dump(mode="json")
 
         artifact = {
@@ -419,6 +430,8 @@ def build_multiagent_graph(
             "status": result.status,
             "sources": result.sources,
             "evidence": result.evidence,
+            "execution_mode": "langchain_structured_tool",
+            "tool_name": agent_tool.tool.name,
         }
 
         return {
@@ -427,25 +440,13 @@ def build_multiagent_graph(
         }
 
     def sales_worker(state: dict) -> dict:
-        return execute_worker(
-            sales_graph,
-            "sales",
-            state,
-        )
+        return execute_worker("sales", state)
 
     def knowledge_worker(state: dict) -> dict:
-        return execute_worker(
-            knowledge_graph,
-            "knowledge",
-            state,
-        )
+        return execute_worker("knowledge", state)
 
     def economic_worker(state: dict) -> dict:
-        return execute_worker(
-            economic_graph,
-            "economic",
-            state,
-        )
+        return execute_worker("economic", state)
 
     # --------------------------------------------------------
     # Audit Agent: valida presença e coerência das fontes
@@ -484,15 +485,28 @@ def build_multiagent_graph(
             ):
                 warnings.append("economic: fonte SGS 432 não comprovada.")
 
+        consensus = weighted_evidence_consensus(
+            current_results,
+            state.get("route", []),
+        )
+        if consensus["status"] != "accepted":
+            warnings.append(
+                "Consenso ponderado exige atenção: "
+                f"{consensus['status']} "
+                f"(suporte={consensus['evidence_support_score']:.2f})."
+            )
+
         audit = {
             "request_id": state["request_id"],
             "results_reviewed": len(current_results),
-            "passed": len(warnings) == 0,
+            "passed": len(warnings) == 0 and consensus["status"] == "accepted",
             "warnings": warnings,
+            "weighted_consensus": consensus,
         }
 
         return {
             "audit": audit,
+            "weighted_consensus": consensus,
             "blackboard": [
                 {
                     "request_id": state["request_id"],
@@ -558,9 +572,18 @@ def build_multiagent_graph(
             parts.append("")
 
         audit = state.get("audit", {})
-
+        consensus = audit.get("weighted_consensus", {})
+        consensus_score = consensus.get("evidence_support_score", 0.0)
         parts.extend(
             [
+                "## CONSENSO PONDERADO",
+                f"Status: {consensus.get('status', 'not_calculated')}",
+                f"Índice de suporte por evidências: {consensus_score:.2f}",
+                "Método: pesos por especialidade, evidências e fontes;",
+                "não é uma probabilidade calibrada.",
+                "Agentes ausentes: "
+                + (", ".join(consensus.get("missing_agents", [])) or "nenhum"),
+                "",
                 "## AUDITORIA",
                 (
                     "Aprovada."
@@ -580,6 +603,37 @@ def build_multiagent_graph(
         return {
             "answer": answer,
             "messages": [AIMessage(content=answer)],
+        }
+
+    def instruction_fidelity_node(state: MultiAgentState) -> dict:
+        fidelity = audit_instruction_fidelity(
+            question=state.get("question", ""),
+            answer=state.get("answer", ""),
+            selected_agents=state.get("route", []),
+            agent_results=state.get("agent_results", []),
+            request_id=state.get("request_id", ""),
+            approval_required=state.get("approval_required", False),
+            pending_action=state.get("pending_action", {}),
+        )
+        failed = fidelity.get("failed_checks", [])
+        lines = [
+            "## AUDITORIA DE FIDELIDADE",
+            f"Status: {fidelity['status']}",
+            f"Pontuação: {fidelity['score']:.2f} "
+            f"({fidelity['passed_checks']}/{fidelity['total_checks']} verificações)",
+            f"Intenção classificada: {fidelity['intent_classification']}",
+            "Agentes esperados: "
+            + (", ".join(fidelity.get("expected_agents", [])) or "não inferidos"),
+            "Agentes acionados: "
+            + (", ".join(fidelity.get("selected_agents", [])) or "nenhum"),
+            "Verificações pendentes: " + (", ".join(failed) or "nenhuma"),
+        ]
+        section = "\n".join(lines)
+        updated_answer = (state.get("answer", "") + "\n\n" + section).strip()
+        return {
+            "instruction_fidelity": fidelity,
+            "answer": updated_answer,
+            "messages": [AIMessage(content=section)],
         }
 
     # --------------------------------------------------------
@@ -750,6 +804,7 @@ def build_multiagent_graph(
 
     builder.add_node("audit", audit_node)
     builder.add_node("synthesize", synthesize_node)
+    builder.add_node("instruction_fidelity_audit", instruction_fidelity_node)
     builder.add_node("human_approval", human_approval_node)
     builder.add_node(
         "execute_approved_action",
@@ -775,8 +830,9 @@ def build_multiagent_graph(
     builder.add_edge("economic_worker", "audit")
 
     builder.add_edge("audit", "synthesize")
+    builder.add_edge("synthesize", "instruction_fidelity_audit")
     builder.add_conditional_edges(
-        "synthesize",
+        "instruction_fidelity_audit",
         route_after_synthesis,
         {
             "approval": "human_approval",
@@ -796,6 +852,8 @@ def build_multiagent_graph(
     builder.add_edge("execute_approved_action", END)
     builder.add_edge("reject_action", END)
 
-    memory = checkpointer if checkpointer is not None else InMemorySaver()
+    memory = checkpointer if checkpointer is not None else (
+        InMemorySaver() if use_in_memory_saver else None
+    )
 
     return builder.compile(checkpointer=memory)

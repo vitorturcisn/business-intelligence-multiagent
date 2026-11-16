@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from bi_multiagent.settings import DATABASE_PATH
 from bi_multiagent.tools.business_tools import (
     get_bcb_series,
     get_sales_schema,
@@ -13,7 +14,9 @@ from bi_multiagent.tools.business_tools import (
 def test_sales_schema_identifies_real_table():
     result = json.loads(get_sales_schema.func())
 
-    assert result["database"] == "sales.db"
+    # The schema must identify the active database, whether it is the default
+    # sales.db or an explicitly selected benchmark database.
+    assert result["database"] == DATABASE_PATH.name
     assert result["table_names"] == ["sales"]
 
     columns = [column["column"] for column in result["tables"]["sales"]]

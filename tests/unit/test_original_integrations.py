@@ -63,7 +63,8 @@ def test_sales_analyst_rejects_invalid_text_to_query_plan():
     assert "data/sample/sales.db" in payload.sources
 
 
-def test_knowledge_analyst_combines_faiss_and_documentary_retrieval():
+def test_knowledge_analyst_combines_faiss_and_documentary_retrieval(monkeypatch):
+    monkeypatch.setenv("KNOWLEDGE_VECTOR_BACKEND", "faiss")
     def fake_retriever(_question: str, k: int = 4) -> str:
         assert k == 4
         return (

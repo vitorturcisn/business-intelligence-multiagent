@@ -113,7 +113,13 @@ def main() -> None:
     config = {
         "configurable": {
             "thread_id": args.thread_id,
-        }
+        },
+        "tags": ["business-intelligence", "supervisor", "multi-agent"],
+        "metadata": {
+            "application": "business-intelligence-multiagent",
+            "runtime": "multiagent_cli",
+            "component": "supervisor",
+        },
     }
 
     with postgres_checkpointer() as checkpointer:

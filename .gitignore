@@ -46,3 +46,9 @@ outputs/
 # Arquivos temporários de editores
 *.swp
 *.tmp
+
+# LangGraph local runtime
+.langgraph_api/
+
+# Timestamped backup files
+*.backup-*

@@ -35,6 +35,8 @@ class MultiAgentState(MessagesState, total=False):
     blackboard: Annotated[list[dict[str, Any]], operator.add]
 
     audit: dict[str, Any]
+    weighted_consensus: dict[str, Any]
+    instruction_fidelity: dict[str, Any]
     answer: str
 
     # Human-in-the-Loop e autorização de ações

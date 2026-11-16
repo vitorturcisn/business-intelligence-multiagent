@@ -295,3 +295,21 @@ A versão documentada apresenta as seguintes limitações ou itens em desenvolvi
 ## 14. Licença e contexto acadêmico
 
 Projeto desenvolvido para a disciplina **Agentes Cognitivos com LangChain [26E4_2]**. O trabalho utiliza ferramentas de IA como apoio ao desenvolvimento e à documentação; as decisões, validações e evidências apresentadas devem ser verificadas pelo autor.
+
+## Banco SQLite alternativo para benchmark
+
+A variável opcional `BI_MULTIAGENT_DATABASE_PATH` seleciona o arquivo SQLite usado pelos módulos de vendas e pelo benchmark. Quando não está definida ou está vazia, o sistema mantém o caminho padrão `data/sample/sales.db`.
+
+Para validar uma base sintética separada sem substituir o banco local existente:
+
+```powershell
+python -m bi_multiagent.data.seed --output .\data\sample\sales_benchmark_v2.db
+$env:BI_MULTIAGENT_DATABASE_PATH = (Resolve-Path .\data\sample\sales_benchmark_v2.db).Path
+python .\scripts\evaluate_reasoning_architectures.py --dry-run
+```
+
+Para voltar ao banco padrão na sessão atual do PowerShell:
+
+```powershell
+Remove-Item Env:BI_MULTIAGENT_DATABASE_PATH -ErrorAction SilentlyContinue
+```

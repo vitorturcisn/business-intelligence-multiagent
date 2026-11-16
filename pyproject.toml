@@ -23,12 +23,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "langgraph-cli[inmem]",
     "pytest",
     "pytest-cov",
     "ruff"
 ]
 
 retrieval = [
+    "langchain-postgres>=0.0.14,<0.1",
     "langchain-community==0.4.2",
     "langchain-huggingface[full]==1.2.3",
     "faiss-cpu==1.15.1",

@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import unicodedata
 from datetime import datetime
@@ -394,30 +395,41 @@ def retrieve_knowledge(
 ) -> dict:
     question = state["question"]
 
+    backend = os.getenv("KNOWLEDGE_VECTOR_BACKEND", "faiss").strip().casefold()
+    backend_label = {"faiss": "FAISS", "supabase": "Supabase PGVector"}.get(
+        backend, backend.upper() or "desconhecido"
+    )
+
     warnings = []
     vector_evidence = ""
     lexical_evidence = ""
 
-    # Recuperação semântica com o índice FAISS original.
+    # Recuperação semântica pelo backend vetorial configurado.
     try:
-        if retriever is None:
-            from business_agent.tools.rag_tool import search_knowledge_base
+        active_retriever = retriever
+        if active_retriever is None:
+            if backend == "supabase":
+                from bi_multiagent.retrieval.supabase_pgvector import (
+                    search_supabase_knowledge_base,
+                )
 
-            vector_evidence = search_knowledge_base(
-                question,
-                k=4,
-            )
-        else:
-            vector_evidence = retriever(
-                question,
-                k=4,
-            )
+                active_retriever = search_supabase_knowledge_base
+            elif backend == "faiss":
+                from business_agent.tools.rag_tool import search_knowledge_base
+
+                active_retriever = search_knowledge_base
+            else:
+                raise ValueError(
+                    "KNOWLEDGE_VECTOR_BACKEND must be 'faiss' or 'supabase'."
+                )
+
+        vector_evidence = active_retriever(question, k=4)
 
         vector_evidence = str(vector_evidence)
 
     except Exception as exc:  # noqa: BLE001
         warnings.append(
-            "Recuperação vetorial FAISS indisponível; "
+            f"Recuperação vetorial {backend_label} indisponível; "
             f"foi acionado o complemento documental ({type(exc).__name__})."
         )
 
@@ -440,7 +452,7 @@ def retrieve_knowledge(
 
     if not _extract_vector_sources(vector_evidence) and not warnings:
         warnings.append(
-            "A busca FAISS não identificou fontes; "
+            f"A busca {backend_label} não identificou fontes; "
             "a recuperação documental complementar foi utilizada."
         )
 
@@ -449,7 +461,7 @@ def retrieve_knowledge(
     if vector_evidence.strip():
         evidence_parts.extend(
             [
-                "RECUPERAÇÃO SEMÂNTICA (FAISS):",
+                f"RECUPERAÇÃO SEMÂNTICA ({backend_label.upper()}):",
                 vector_evidence.strip(),
             ]
         )
@@ -476,6 +488,13 @@ def compile_knowledge_result(state: WorkerState) -> dict:
     sources = state.get("sources", [])
     warnings = state.get("warnings", [])
 
+    # Recalcula o rótulo neste escopo: compile_knowledge_result é uma
+    # função separada de retrieve_knowledge e não compartilha variáveis locais.
+    backend = os.getenv("KNOWLEDGE_VECTOR_BACKEND", "faiss").strip().casefold()
+    backend_label = {"faiss": "FAISS", "supabase": "Supabase PGVector"}.get(
+        backend, backend.upper() or "desconhecido"
+    )
+
     if not sources:
         result = AgentResult(
             request_id=state["request_id"],
@@ -495,7 +514,7 @@ def compile_knowledge_result(state: WorkerState) -> dict:
             status="completed",
             summary=(
                 f"Foram identificadas {len(sources)} fontes documentais "
-                "pela recuperação semântica FAISS e pela recuperação "
+                f"pela recuperação semântica {backend_label} e pela recuperação "
                 "documental complementar."
             ),
             evidence=evidence,
@@ -507,7 +526,7 @@ def compile_knowledge_result(state: WorkerState) -> dict:
 
 
 def build_knowledge_analyst_graph(retriever: Any | None = None):
-    """Subgrafo Knowledge Analyst: FAISS + recuperação complementar."""
+    """Subgrafo Knowledge Analyst: backend vetorial + recuperação complementar."""
 
     def retrieve_knowledge_node(state: WorkerState) -> dict:
         return retrieve_knowledge(state, retriever=retriever)
